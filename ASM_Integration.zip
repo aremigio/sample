@@ -1,0 +1,564 @@
+<!---
+DATE		TICKET		PROGRAMMER		NOTE
+2017/08/30	ST980339	AREMIGIO		Added STF-CA for student file export, assigned person_number to use student's ID.
+--->
+
+<cfparam name="DSN" default="" />
+<cfparam name="MaintenanceID" default="0" />
+
+<cfif Len(Trim(DSN))>
+    <cfquery name="chkASMAccount" datasource="#DSN#">
+        SELECT 
+            (SELECT v1.DATA from vw_UD_Data v1 WHERE v1.GroupName = 'Apple School Management' AND v1.FieldName = 'sFTP Login') as sFTPLogin,
+            (SELECT v2.DATA from vw_UD_Data v2 WHERE v2.GroupName = 'Apple School Management' AND v2.FieldName = 'sFTP Password') as sFTPPassword,
+            ISNULL((SELECT v3.DATA from vw_UD_Data v3 WHERE v3.GroupName = 'Apple School Management' AND v3.FieldName = 'Use Student UDID'),0) 
+            	AS defStudentID,
+            ISNULL((SELECT v4.DATA from vw_UD_Data v4 WHERE v4.GroupName = 'Apple School Management' AND v4.FieldName = 'Password Policy'),8)
+            	AS defPasswordPolicy,
+			(SELECT v2.DATA from vw_UD_Data v2 WHERE v2.GroupName = 'Apple School Management' AND v2.FieldName = 'Selected Schools')
+            	AS defSchoolList
+    </cfquery>
+
+	<cfif chkASMAccount.RecordCount>
+        <cfsetting requesttimeout="300" />
+        <!doctype html>
+        
+        <cffunction name="getQueryResults" access="public" returntype="query" output="false" hint="Pass in DSN, return results of that DSN">
+            <cfargument name="DSN" required="yes" type="string" hint="DSN name" />
+            <cfargument name="intType" required="yes" type="numeric" hint="Type ID" />
+            <cfargument name="intUseStudentID" required="no" type="numeric" default="0" />
+        
+            <cfset var getData = structNew()>
+            <!--- 
+            1 - classes
+            2 - courses
+            3 - locations
+            4 - rosters
+            5 - staff
+            6 - student
+            --->
+            
+            <cfswitch expression="#Arguments.intType#">
+            <cfcase value="1">	
+                <!---
+                classes.csv
+                
+                class_id,class_number,course_id,instructor_id,instructor_id_2,instructor_id_3,location_id
+                ISNULL(,'##')
+                --->
+                <cfquery name="getData" datasource="#Arguments.DSN#">
+                    SELECT 
+                            DISTINCT(c.ClassID) AS class_id,
+                            (ISNULL(NULLIF(c.Name, ''), '') + ' - ' + c.Section) AS class_number,
+                            c.CourseID AS course_id,
+                            c.StaffID AS instructor_id,
+                            ISNULL((SELECT c1.AltStaffID FROM classes c1 INNER JOIN staff s1 ON c1.AltStaffID = s1.StaffID WHERE s1.Active =1 AND c1.ClassID = c.ClassID), '') AS instructor_id_2,
+                            '' AS instructor_id_3,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                            	'FMCS' AS location_id
+                            <cfelse>
+                            	cs.SchoolCode AS location_id
+                            </cfif>
+                    FROM	configSchool cs
+                                INNER JOIN Classes c ON c.yearid = cs.defaultyearid AND cs.SchoolCode != ''
+								<cfif ListLen(chkASMAccount.defSchoolList)>
+                                	AND cs.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                                </cfif>
+                                INNER JOIN Courses cr ON cr.CourseID = c.CourseID AND cr.Active = 1
+								<cfif ListLen(chkASMAccount.defSchoolList)>
+                                	AND cr.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                                </cfif>
+                                INNER JOIN Staff st ON st.StaffID = c.StaffID AND st.Active = 1
+                                	AND (	SELECT count(tmp1.StaffID) 
+											FROM StaffSchools tmp1
+											WHERE tmp1.StaffID = st.StaffID
+											<cfif ListLen(chkASMAccount.defSchoolList)>
+                                				AND tmp1.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                           					</cfif>) > 0
+                                INNER JOIN Roster r ON r.classid = c.classid
+							
+                    GROUP BY
+                            c.ClassID, c.CourseID, c.StaffID, c.AltStaffID, c.Name, c.Section
+                            <cfif Arguments.DSN NEQ "FM-FL">
+                            	, cs.SchoolCode
+                            </cfif>
+                    ORDER BY
+                            class_number, c.ClassID, c.CourseID, c.StaffID
+                            <cfif Arguments.DSN NEQ "FM-FL">
+                            	, cs.SchoolCode
+                            </cfif>
+                </cfquery>
+            </cfcase> 
+            <cfcase value="2">
+                <!---
+                courses.csv
+                
+                course_id,course_number,course_name,location_id
+                --->
+                <cfquery name="getData" datasource="#Arguments.DSN#">
+                    SELECT  
+                            DISTINCT(cr.CourseID) AS course_id,
+                            ISNULL(NULLIF(cr.Abbreviation, ''), '') AS course_number,
+                            ISNULL(NULLIF(cr.Title, ''), '') AS course_name,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                            	'FMCS' AS location_id
+                            <cfelse>
+                            	cr.SchoolCode AS location_id
+                            </cfif>
+                    FROM	configSchool cs
+                                INNER JOIN Classes c ON c.yearid = cs.defaultyearid AND cs.SchoolCode != ''
+								<cfif ListLen(chkASMAccount.defSchoolList)>
+                                	AND cs.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                                </cfif>
+                                INNER JOIN Courses cr ON cr.CourseID = c.CourseID
+                                INNER JOIN Staff st ON st.StaffID = c.StaffID
+                    WHERE	
+                            cr.Active = 1
+                            AND st.Active = 1
+                    GROUP BY
+                            cr.CourseID, cr.Title, cr.Abbreviation
+                            <cfif Arguments.DSN NEQ "FM-FL">
+                            	, cr.SchoolCode
+                            </cfif>
+                    ORDER BY
+                            course_number, course_name
+                </cfquery>
+            </cfcase>
+            <cfcase value="3">
+                <!---
+                locations.csv
+                
+                location_id,location_name
+                --->
+                <cfquery name="getData" datasource="#Arguments.DSN#">
+                    SELECT
+                    		<cfif Arguments.DSN EQ "FM-FL">
+                            	'FMCS' as location_id,
+                            <cfelse>
+                            	SchoolCode AS location_id,
+                            </cfif>
+                            SchoolName AS location_name
+                    FROM
+                            ConfigSchool
+					WHERE
+ 							SchoolCode != ''
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                                AND SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                    ORDER BY
+                            SchoolName
+                </cfquery>
+            </cfcase>
+        
+            <cfcase value="4">
+                <!---
+                rosters.csv
+                
+                roster_id,section_id,student_id
+                --->
+                <cfset var listStudentIDs = "">
+                <cfset var tmpQry = structNew()>
+                
+                <cfset tmpQry = getQueryResults(DSN,6)>
+                <cfset listStudentsIDs = ValueList(tmpQry.person_id,',')>
+                <cfif NOT ListLen(listStudentsIDs)>
+                    <cfset listStudentsIDs = 0>
+                </cfif>
+                
+                <cfquery name="getData" datasource="#Arguments.DSN#">
+                    SELECT	r.ClassID AS class_id,
+                    		<cfif Arguments.intUseStudentID>
+                            s.SchoolID<cfelse>s.StudentID</cfif> AS student_id
+                    FROM	configSchool cs
+                            INNER JOIN Classes c ON c.yearid = cs.defaultyearid
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                            	AND cs.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                            INNER JOIN Staff st ON st.StaffID = c.StaffID AND st.Active = 1
+                                	AND (	SELECT count(tmp1.StaffID) 
+											FROM StaffSchools tmp1
+											WHERE tmp1.StaffID = st.StaffID
+											<cfif ListLen(chkASMAccount.defSchoolList)>
+                                				AND tmp1.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                           					</cfif>) > 0
+                            INNER JOIN Courses cr ON cr.CourseID = c.CourseID AND cr.Active = 1
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                                AND cr.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                            INNER JOIN Roster r ON r.ClassID = c.ClassID AND r.Enrolled = 1
+                            INNER JOIN Students s ON R.StudentID = s.StudentID
+                    WHERE
+                            R.StudentID IN (#listStudentsIDs#)
+ 							AND cs.SchoolCode != ''
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                                AND cs.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                </cfquery>
+            </cfcase>
+        
+            <cfcase value="5">
+                <!---
+                staff.csv
+                
+                person_id,person_number,first_name,middle_name,last_name,email_address,sis_username,location_id
+                --->
+                <cfquery name="getData" datasource="#Arguments.DSN#">
+                    SELECT 
+                            DISTINCT(s.PersonID) AS person_id,
+                            s.StaffID AS person_number,
+                            s.FirstName AS first_name,
+                            ISNULL(NULLIF(s.MiddleName, ''), '')  AS middle_name,
+                            s.LastName AS last_name,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                                CONCAT(Left(Lower(s.FirstName),1),Lower(s.LastName),'@apple.fmcs-fl.com')
+                            <cfelse>
+                            	ISNULL(NULLIF(s.Email, ''), '') 
+                            </cfif> AS email_address,
+                            <cfif Arguments.DSN EQ "ND-CA">
+                            CONCAT(Left(Lower(s.FirstName),1),Left(Lower(s.LastName),1),s.StaffID,'@appleid.ndhsriverside.org')
+                            <cfelse>
+                            	ISNULL(NULLIF(p.Username, ''), '')
+							</cfif> AS sis_username,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                            	'FMCS' as location_id
+                            <cfelse>
+                                (	SELECT TOP 1	SchoolCode 
+                                    FROM			staffschools
+                                    WHERE			StaffID = s.StaffID
+                                    				<cfif ListLen(chkASMAccount.defSchoolList)>
+                                						AND SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            						</cfif>
+                                    ) AS location_id
+                            </cfif>
+                    FROM	staff s
+                            INNER JOIN classes c ON s.staffid = c.StaffID
+                            INNER JOIN configSchool cs ON c.YearID = cs.DefaultYearID AND cs.SchoolCode != ''
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                                AND cs.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                            INNER JOIN Courses cr ON cr.CourseID = c.CourseID AND cr.Active = 1
+                            INNER JOIN person p ON p.PersonID = s.StaffID
+                    WHERE
+                            s.Active = 1
+							AND (SELECT count(tmp1.StaffID) 
+									FROM StaffSchools tmp1
+									WHERE tmp1.StaffID = S.StaffID
+                                    <cfif ListLen(chkASMAccount.defSchoolList)>
+                                		AND tmp1.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            		</cfif>
+                                    ) > 0	
+                UNION
+        
+                    SELECT 
+                            DISTINCT(s.PersonID) AS person_id,
+                            s.StaffID AS person_number,
+                            s.FirstName AS first_name,
+                            ISNULL(NULLIF(s.MiddleName, ''), '')  AS middle_name,
+                            s.LastName AS last_name,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                                CONCAT(Left(Lower(s.FirstName),1),Lower(s.LastName),'@apple.fmcs-fl.com') AS email_address,
+                            <cfelse>
+                            	ISNULL(NULLIF(s.Email, ''), '') AS email_address,
+                            </cfif>
+                            <cfif Arguments.DSN EQ "ND-CA">
+                            CONCAT(Left(Lower(s.FirstName),1),Left(Lower(s.LastName),1),s.StaffID,'@appleid.ndhsriverside.org')
+                            <cfelse>
+                            	ISNULL(NULLIF(p.Username, ''), '')
+							</cfif> AS sis_username,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                            	'FMCS' as location_id
+                            <cfelse>
+                                (	SELECT TOP 1	SchoolCode 
+                                    FROM			staffschools
+                                    WHERE			StaffID = s.StaffID
+													<cfif ListLen(chkASMAccount.defSchoolList)>
+                                						AND SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            						</cfif>
+                                    ) AS location_id
+                            </cfif>
+                    FROM	staff s
+                            INNER JOIN classes c1 on c1.altStaffID = s.staffID
+                            INNER JOIN configSchool cs ON c1.YearID = cs.DefaultYearID AND cs.SchoolCode != ''
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                                AND cs.SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                            INNER JOIN Courses cr ON cr.CourseID = c1.CourseID AND cr.Active = 1
+                            INNER JOIN person p ON p.PersonID = s.StaffID
+                    WHERE
+                            s.Active = 1	
+         
+                    ORDER BY
+                            s.Lastname, s.FirstName, s.PersonID  
+                </cfquery>
+            </cfcase>
+            
+            <cfcase value="6">
+                <!---
+                student.csv
+                
+                person_id,person_number,first_name,middle_name,last_name,grade_level,email_address,sis_username,password_policy,location_id
+                --->
+                <cfquery name="getData" datasource="#Arguments.DSN#">
+                    SELECT
+                            st.StudentID AS person_id,
+                            <cfif Arguments.DSN EQ "FM-FL" OR Arguments.DSN EQ "CAS-WA" OR Arguments.DSN EQ "ND-CA" OR Arguments.DSN EQ "STF-CA">
+                            	st.StudentID AS person_number,
+                            <cfelse>
+                            	st.SchoolID AS person_number,
+                            </cfif>
+                            p.FirstName AS first_name,
+                            ISNULL(NULLIF(p.MiddleName, ''), '') AS middle_name,
+                            p.LastName AS last_name,
+                            ISNULL(NULLIF(st.GradeLevel, ''), '') AS grade_level,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                            	CONCAT(Lower(p.FirstName),Lower(p.LastName),Right(st.StudentID,2)) AS email_address,
+                            <cfelse>
+                            	ISNULL(NULLIF(st.email, ''), '') AS email_address,
+                            </cfif>
+                            <cfif Arguments.DSN EQ "ND-CA">
+                            	<!--- CONCAT(Left(Lower(p.FirstName),1),Left(Lower(p.LastName),1),st.StudentID,'@appleid.ndhsriverside.org') --->
+                            	''
+                            <cfelse>
+                            	ISNULL(NULLIF(p.Username, ''), '')
+							</cfif> AS sis_username,
+                            <cfif Arguments.DSN EQ "FM-FL">
+                            	'4' AS password_policy,
+                                'FMCS' AS location_id
+                            <cfelse>
+                            	'#chkASMAccount.defPasswordPolicy#' AS password_policy,
+                                st.SchoolCode AS location_id
+                            </cfif>
+                            
+                    FROM
+                            Students st
+                            INNER JOIN Person p ON p.PersonID = st.StudentID
+                    WHERE
+                            Status = 'Enrolled'
+                            AND SchoolCode != ''
+							<cfif ListLen(chkASMAccount.defSchoolList)>
+                                AND SchoolCode IN (<cfqueryparam cfsqltype="cf_sql_varchar" list="yes" separator="," value="#chkASMAccount.defSchoolList#" />)
+                            </cfif>
+                    ORDER BY
+                            p.Lastname, p.FirstName
+                </cfquery>
+            </cfcase>
+            </cfswitch>
+        
+            <cfreturn getData> 
+        </cffunction>
+        
+        <cfscript>
+            Request.SendTo = "andell.remigio@renweb.com";
+            Request.MaintLib = createObject("component","renweb.maintenance.MaintenanceLib");
+            Maint1 = Request.MaintLib.insMaintenanceLog(DSN,MaintenanceID,"Start sFTP DataUpload...");
+            
+            tmpData = StructNew();
+            // DEFAULTS
+            tmpData.DATA_BasePath = "\\nas-web\wilcomp\wwwroot\clients\renweb.com\ftp\#DSN#\dataexport\";
+            tmpData.filename = "#DSN#_Export2ASM.zip";
+            tmpData.fullPathfilename = "#tmpData.DATA_BasePath##tmpData.filename#";
+            
+            // FILENAME ORDER
+            tmpData.listExportFileName = "classes,courses,locations,rosters,staff,students";
+            // FTP INFORMATION
+            tmpData.usrServer = "upload.appleschoolcontent.com";
+            tmpData.usrUsername = chkASMAccount.sFTPLogin;
+            tmpData.usrPassword = chkASMAccount.sFTPPassword;
+        </cfscript>
+        
+        <!--- DIRECTORY CHECK --->
+        <cfoutput>
+            <!--- IF NOT FOUND, CREATE DIRECTORY --->
+            <cfif NOT DirectoryExists(tmpData.DATA_BasePath)>
+                <cfdirectory action = "create" directory = "#tmpData.DATA_BasePath#">
+            </cfif>
+        </cfoutput>
+        
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <title>Report - Export Apple Classroom Data</title>
+        </head>
+        
+        <body>
+        <cfset intLoopCount = 0>
+        <p style="font-size:24px; font-weight:700">Report - Export Apple Classroom Data:</p>
+        <cfoutput>
+        <cfloop list="#tmpData.listExportFileName#" index="idxFileName">
+            <cfset intLoopCount = intLoopCount + 1>
+            
+            <!---Set Filename --->
+            <!--- <cfset strTempFile = "#tmpData.DATA_BasePath##idxFileName#.csv"> --->
+            <cfset strTempFile = "#tmpData.DATA_BasePath##idxFileName#.csv">
+            
+            <!---
+            <cffile action = "rename" source = "#tmpData.DATA_BasePath##idxFileName#.csv" destination = "#tmpData.DATA_BasePath##idxFileName#.txt" attributes="normal">
+            --->
+            
+            <!--- Create a string buffer to hold our output. --->
+            <cfset sbOutput = CreateObject("java","java.lang.StringBuffer").Init() />   
+            
+            <cfset retDataSet = getQueryResults(DSN,intLoopCount,chkASMAccount.defStudentID)>
+            <!--- Write Column Headers. --->
+            <cfswitch expression="#intLoopCount#">
+                <cfcase value="1">	<!--- classes --->
+                    <cfset sbOutput.Append("class_id,class_number,course_id,instructor_id,instructor_id_2,instructor_id_3,location_id" & Chr( 13 ) ) />
+                    <cfloop query="retDataSet">
+                        <cfif isNumeric(retDataSet.instructor_id_2) AND retDataSet.instructor_id_2>
+                            <cfset intInstruct2 = retDataSet.instructor_id_2>
+                        <cfelse>
+                            <cfset intInstruct2 = ''>
+                        </cfif>
+                        <cfif isNumeric(retDataSet.instructor_id_3) AND retDataSet.instructor_id_3>
+                            <cfset intInstruct3 = retDataSet.instructor_id_3>
+                        <cfelse>
+                            <cfset intInstruct3 = ''>
+                        </cfif>
+                        <cfif retDataSet.CurrentRow NEQ retDataSet.RecordCount>
+                            <cfset sbOutput.Append('"#retDataSet.class_id#","#retDataSet.class_number#","#retDataSet.course_id#","#retDataSet.instructor_id#","#intInstruct2#","#intInstruct3#","#retDataSet.location_id#"' & Chr( 13 ) ) />
+                        <cfelse>
+                            <cfset sbOutput.Append('"#retDataSet.class_id#","#retDataSet.class_number#","#retDataSet.course_id#","#retDataSet.instructor_id#","#intInstruct2#","#intInstruct3#","#retDataSet.location_id#"' ) />
+                        </cfif>
+                    </cfloop>
+                </cfcase>
+                <cfcase value="2">	<!--- courses --->
+                    <cfset sbOutput.Append("course_id,course_number,course_name,location_id" & Chr( 13 ) ) />
+                    <cfloop query="retDataSet">
+                        <cfif retDataSet.CurrentRow NEQ retDataSet.RecordCount>
+                            <cfset sbOutput.Append('"#retDataSet.course_id#","#retDataSet.course_number#","#retDataSet.course_name#","#retDataSet.location_id#"' & Chr( 13 ) ) />
+                        <cfelse>
+                            <cfset sbOutput.Append('"#retDataSet.course_id#","#retDataSet.course_number#","#retDataSet.course_name#","#retDataSet.location_id#"' ) />
+                        </cfif>
+                    </cfloop>
+                </cfcase>
+                <cfcase value="3">	<!--- locations --->
+                    <cfset sbOutput.Append("location_id,location_name" & Chr( 13 ) ) />
+                    <cfloop query="retDataSet">
+                        <cfif retDataSet.CurrentRow NEQ retDataSet.RecordCount>
+                            <cfset sbOutput.Append('"#retDataSet.location_id#","#retDataSet.location_name#"' & Chr( 13 ) ) />
+                        <cfelse>
+                            <cfset sbOutput.Append('"#retDataSet.location_id#","#retDataSet.location_name#"' ) />
+                        </cfif>
+                    </cfloop>
+                </cfcase>
+                <cfcase value="4">	<!--- rosters --->
+                    <cfset sbOutput.Append("roster_id,class_id,student_id" & Chr( 13 ) ) />
+                    <cfloop query="retDataSet">
+                        <cfif retDataSet.CurrentRow NEQ retDataSet.RecordCount>
+                            <cfset sbOutput.Append('"#CreateUUID()#","#retDataSet.class_id#","#retDataSet.student_id#"' & Chr( 13 ) ) />
+                        <cfelse>
+                            <cfset sbOutput.Append('"#CreateUUID()#","#retDataSet.class_id#","#retDataSet.student_id#"' ) />
+                        </cfif>
+                    </cfloop>
+                </cfcase>
+                <cfcase value="5">	<!--- staff --->
+                    <cfset sbOutput.Append("person_id,person_number,first_name,middle_name,last_name,email_address,sis_username,location_id" & Chr( 13 ) ) />
+                    <cfloop query="retDataSet">
+                        <cfif isValid("email",retDataSet.email_address)>
+                            <cfset setEmail = Trim(retDataSet.email_address)>
+                        <cfelse>
+                            <cfset setEmail = "">
+                        </cfif>
+                        <cfif retDataSet.CurrentRow NEQ retDataSet.RecordCount>
+                            <cfset sbOutput.Append('"#retDataSet.person_id#","#retDataSet.person_number#","#retDataSet.first_name#","#retDataSet.middle_name#","#retDataSet.last_name#","#setEmail#","#retDataSet.sis_username#","#retDataSet.location_id#"' & Chr( 13 ) ) />
+                        <cfelse>
+                            <cfset sbOutput.Append('"#retDataSet.person_id#","#retDataSet.person_number#","#retDataSet.first_name#","#retDataSet.middle_name#","#retDataSet.last_name#","#setEmail#","#retDataSet.sis_username#","#retDataSet.location_id#"' ) />
+                        </cfif>
+                    </cfloop>
+                </cfcase>
+                <cfcase value="6">	<!--- student --->
+                	<cfset tmpStudentID = 0>
+                    <cfset sbOutput.Append("person_id,person_number,first_name,middle_name,last_name,grade_level,email_address,sis_username,password_policy,location_id" & Chr( 13 ) ) />
+                    <cfloop query="retDataSet">
+                    	
+                    	<cfif chkASMAccount.defStudentID>
+                        	<!--- IF SCHOOL USER DEFINED FOR ASM IS 'Use Student UDID' --->
+                            <cfset strUniqueID = Trim(retDataSet.person_number)>
+                            <cfset strOptionID = Trim(retDataSet.person_id)>
+                        <cfelse>
+                        	<!--- OTHERWISE, DEFAULT TO --->
+                        	<cfset strUniqueID = Trim(retDataSet.person_id)>
+                            <cfset strOptionID = Trim(retDataSet.person_number)>
+                        </cfif>
+                        
+                        <cfif DSN EQ "FM-FL">
+                            <!--- <cfset strTmpEmail = ReReplace(retDataSet.email_address, '[^A-Za-z0-9._%+@-]', '') & '@apple.fmcs-fl.com'> --->
+                            <cfset strTmpEmail = ReReplace(retDataSet.email_address, "[^a-z0-9]", "") & '@apple.fmcs-fl.com'>
+                            <cfset strTmpEmail = Replace(strTmpEmail,' ','','all')>
+						<cfelse>
+                            <cfset strTmpEmail = LCase(Trim(retDataSet.email_address))>
+                        </cfif>
+                        
+                        <cfif isValid("email",strTmpEmail)>
+                            <cfset strEmail = strTmpEmail>
+                        <cfelse>
+                            <cfset strEmail = "">
+                        </cfif>
+                        
+                        <!--- CHECK TO MAKE SURE IF THIS STUDENT WAS PREVIOUSLY APPENDED/IMPORTED; IF NOT, INSERT, OTHERWISE, SKIP IT --->
+                        <cfif tmpStudentID NEQ strUniqueID>
+							<cfif retDataSet.CurrentRow NEQ retDataSet.RecordCount>
+                                <cfset sbOutput.Append('"#strUniqueID#","#strOptionID#","#retDataSet.first_name#","#retDataSet.middle_name#","#retDataSet.last_name#","#retDataSet.grade_level#","#strEmail#","#retDataSet.sis_username#","#retDataSet.password_policy#","#retDataSet.location_id#"' & Chr( 13 ) ) />
+                            <cfelse>
+                                <cfset sbOutput.Append('"#strUniqueID#","#strOptionID#","#retDataSet.first_name#","#retDataSet.middle_name#","#retDataSet.last_name#","#retDataSet.grade_level#","#strEmail#","#retDataSet.sis_username#","#retDataSet.password_policy#","#retDataSet.location_id#"' ) />
+                            </cfif>
+                        	<cfset tmpStudentID = strUniqueID>
+                        </cfif>
+                    </cfloop>
+                </cfcase>
+            </cfswitch>
+            
+        
+            <cffile	action="WRITE" file="#strTempFile#"	output="#sbOutput.ToString()#" charset="utf-8" />
+        
+            #intLoopCount#. #idxFileName#.csv...complete!<br />
+        </cfloop>
+        
+        <!--- ZIP UP FILES --->
+        <!--- <cfzip source="#tmpData.DATA_BasePath#" file="#tmpData.filename#" recurse="false" filter="*.csv"> --->
+        <cfzip action="zip" source="#tmpData.DATA_BasePath#" file="#tmpData.fullPathfilename#" filter="*.csv" overwrite="true">
+        
+        <!--- PLACEHOLDER FOR sFTP CODE HANDLER --->
+        <!--- Give the page extra time when doing large operations --->
+        <cfsetting requesttimeout="300" />
+        <cfset _jsch = CreateObject('java','com.jcraft.jsch.JSch')>
+        <cfset _jsch.setConfig("PreferredAuthentications", "publickey,keyboard-interactive,password")>
+        
+        <cfftp action = "open" username = "#tmpData.usrUsername#"
+              connection = "MyConnection"
+              password = "#tmpData.usrPassword#"      
+              server = "#tmpData.usrServer#"
+              secure = "yes" passive="yes">
+        
+        <!--- If connection established --->
+        <cfif cfftp.succeeded>
+            <!--- Give the cfftp tag the same "timeout" value for doing large operations --->
+            <cfftp action="listDir" name="RemoteDirectoryContents" directory="/" timeout="300" connection = "MyConnection" />
+            <cfftp connection="MyConnection" action="putFile" name="uploadFile" transferMode="auto" stopOnError="no" secure="yes" 
+                   localFile="#tmpData.fullPathfilename#" remoteFile = "dropbox/#tmpData.filename#" passive="yes" /> 
+                
+            <!--- Close the connection. --->
+            <cfftp action="close" connection="MyConnection" />
+        </cfif>
+        
+        <!--- LOG ENTRIES --->
+        <cfset Log = "#DSN# -- Apple Data Export & FTP upload of CSV file #tmpData.filename#  -- Date/Time: #DateFormat(Now(), 'MM/DD/YYYY')#/#TimeFormat(Now(), 'HH:MM:SS')# EST<br>" />
+        
+        <cfif MaintenanceID EQ 0>
+            <br /><br />
+            <a href="https://#LCase(dsn)#.client.renweb.com/FTP/#dsn#/dataexport/#tmpData.filename#">Download</a> your zip file.
+        <cfelse>
+            <cfscript>
+                Maint2 = Request.MaintLib.insMaintenanceLog(DSN,MaintenanceID,"#Trim(Log)#");
+                Maint3 = Request.MaintLib.insMaintenanceLog(DSN,MaintenanceID,"End of sFTP Connection...");
+            </cfscript>
+            Automated/Scheduled ASM job completed.
+        </cfif>
+        </cfoutput>
+
+    </cfif>
+<cfelse>
+	<h2>No Apple School Management settings were found</h2>
+</cfif>
+<FINISHED>
+<cfexit>
